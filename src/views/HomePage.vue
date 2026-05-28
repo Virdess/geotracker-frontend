@@ -33,6 +33,22 @@
           <div class="hint">
             Поделитесь кодом с другим устройством, чтобы оно увидело вашу геопозицию в реальном времени.
           </div>
+
+          <div class="debug-panel">
+            <div class="debug-title">Диагностика</div>
+            <div class="debug-row">
+              <span>Backend</span>
+              <strong>{{ SOCKET_URL }}</strong>
+            </div>
+            <div class="debug-row">
+              <span>Socket</span>
+              <strong>{{ socketStatus }}</strong>
+            </div>
+            <div class="debug-row">
+              <span>Сборка</span>
+              <strong>{{ buildInfo }}</strong>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -64,6 +80,25 @@
           <div v-if="isWatcherMode" class="watch-note">
             Вы отслеживаете пользователя по коду <strong>{{ trackingCode }}</strong>.
           </div>
+          <div class="debug-panel map-debug-panel">
+            <div class="debug-title">Диагностика</div>
+            <div class="debug-row">
+              <span>Backend</span>
+              <strong>{{ SOCKET_URL }}</strong>
+            </div>
+            <div class="debug-row">
+              <span>Socket</span>
+              <strong>{{ socketStatus }}</strong>
+            </div>
+            <div class="debug-row">
+              <span>ID</span>
+              <strong>{{ socketId || '-' }}</strong>
+            </div>
+            <div class="debug-row">
+              <span>Событие</span>
+              <strong>{{ lastSocketEvent }}</strong>
+            </div>
+          </div>
         </div>
       </div>
     </ion-content>
@@ -71,7 +106,7 @@
 </template>
 
 <script setup>
-import { ref, nextTick, onUnmounted } from 'vue';
+import { ref, nextTick, onUnmounted, computed } from 'vue';
 import { IonPage, IonContent } from '@ionic/vue';
 import { Geolocation } from '@capacitor/geolocation';
 import { Capacitor } from '@capacitor/core';
@@ -86,6 +121,9 @@ const isWatcherMode = ref(false);
 const errorMessage = ref('');
 const speed = ref(0);
 const routeCoordinates = ref([]);
+const socketStatus = ref('не подключен');
+const socketId = ref('');
+const lastSocketEvent = ref('нет событий');
 
 let map = null;
 let marker = null;
@@ -101,6 +139,7 @@ let displayedPosition = null;
 const OPENFREEMAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL
   ?? `${window.location.protocol}//${window.location.hostname}:3001`;
+const buildInfo = computed(() => `${import.meta.env.MODE}${import.meta.env.PROD ? ' / prod' : ' / dev'}`);
 const MIN_ACCURACY_METERS = 80;
 const MIN_DISTANCE_METERS = 4;
 const MAX_REASONABLE_SPEED_MPS = 70;
@@ -323,6 +362,9 @@ const connectSocket = () => {
     return socket;
   }
 
+  socketStatus.value = 'подключение...';
+  lastSocketEvent.value = new Date().toLocaleTimeString();
+
   socket = io(SOCKET_URL, {
     transports: ['websocket'],
     reconnection: true,
@@ -330,14 +372,27 @@ const connectSocket = () => {
 
   socket.on('connect', () => {
     errorMessage.value = '';
+    socketStatus.value = 'подключен';
+    socketId.value = socket.id;
+    lastSocketEvent.value = new Date().toLocaleTimeString();
+  });
+
+  socket.on('disconnect', (reason) => {
+    socketStatus.value = `отключен: ${reason}`;
+    socketId.value = '';
+    lastSocketEvent.value = new Date().toLocaleTimeString();
   });
 
   socket.on('connect_error', (err) => {
+    socketStatus.value = 'ошибка подключения';
+    socketId.value = '';
+    lastSocketEvent.value = new Date().toLocaleTimeString();
     errorMessage.value = 'Не удалось подключиться к серверу отслеживания.';
     console.error('Socket connect_error:', err);
   });
 
   socket.on('trackingError', (data) => {
+    lastSocketEvent.value = new Date().toLocaleTimeString();
     errorMessage.value = data?.message || 'Ошибка сервера отслеживания.';
   });
 
@@ -345,6 +400,8 @@ const connectSocket = () => {
 };
 
 const onServerLocationUpdated = (data) => {
+  lastSocketEvent.value = new Date().toLocaleTimeString();
+
   if (!data || data.code !== normalizeCode()) {
     return;
   }
@@ -564,10 +621,15 @@ const stopTracking = () => {
     socket.off('locationUpdated', onServerLocationUpdated);
     socket.off('connect_error');
     socket.off('connect');
+    socket.off('disconnect');
     socket.off('trackingError');
     socket.disconnect();
     socket = null;
   }
+
+  socketStatus.value = 'не подключен';
+  socketId.value = '';
+  lastSocketEvent.value = 'нет событий';
 };
 
 onUnmounted(() => {
@@ -594,6 +656,11 @@ onUnmounted(() => {
 .hint { margin-top: 10px; color: #6b7280; font-size: 13px; line-height: 1.4; }
 .share-note, .watch-note { margin-top: 12px; font-size: 14px; color: #374151; }
 .bg-yellow { background: #fbbf24; }
+.debug-panel { margin-top: 16px; padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 10px; text-align: left; }
+.debug-title { color: #374151; font-size: 12px; font-weight: 700; margin-bottom: 8px; text-transform: uppercase; }
+.debug-row { display: flex; justify-content: space-between; gap: 12px; color: #6b7280; font-size: 12px; line-height: 1.4; }
+.debug-row strong { color: #111827; font-weight: 600; text-align: right; overflow-wrap: anywhere; }
+.map-debug-panel { margin-top: 12px; }
 
 .map-wrapper { height: 100%; position: relative; }
 .map-container { position: absolute; top: 0; bottom: 0; width: 100%; }
