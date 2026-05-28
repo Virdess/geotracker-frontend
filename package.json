@@ -1,5 +1,5 @@
 {
-  "name": "frontend",
+  "name": "geotrcacker",
   "private": true,
   "version": "0.0.1",
   "type": "module",
@@ -12,14 +12,18 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@capacitor/android": "8.3.4",
     "@capacitor/app": "8.1.0",
     "@capacitor/core": "8.3.4",
+    "@capacitor/geolocation": "^8.2.0",
     "@capacitor/haptics": "8.0.2",
     "@capacitor/keyboard": "8.0.3",
     "@capacitor/status-bar": "8.0.2",
     "@ionic/vue": "^8.0.0",
     "@ionic/vue-router": "^8.0.0",
     "ionicons": "^7.0.0",
+    "maplibre-gl": "^5.24.0",
+    "socket.io-client": "^4.8.3",
     "vue": "^3.3.0",
     "vue-router": "^4.2.0"
   },
