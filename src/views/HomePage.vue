@@ -100,7 +100,7 @@ let displayedPosition = null;
 
 const OPENFREEMAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL
-  ?? `${window.location.protocol}//${window.location.hostname}:3000`;
+  ?? `${window.location.protocol}//${window.location.hostname}:3001`;
 const MIN_ACCURACY_METERS = 80;
 const MIN_DISTANCE_METERS = 4;
 const MAX_REASONABLE_SPEED_MPS = 70;
