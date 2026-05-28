@@ -144,7 +144,7 @@ const updatePosition = (lng, lat) => {
 // --- ПОДКЛЮЧЕНИЕ К БЭКЕНДУ (NESTJS) ---
 const connectSocket = () => {
   // Укажите IP вашего бэкенда. Если тестируете с телефона по Wi-Fi, пишите локальный IP (напр. [http://192.168.](http://192.168.)x.x:3000)
-  socket = io('http://localhost:3000'); 
+  socket = io('http://192.168.8.70:3000'); 
 };
 
 // --- РЕАЛЬНЫЙ GPS (Capacitor) ---
