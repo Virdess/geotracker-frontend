@@ -5,7 +5,7 @@
       <div v-if="currentScreen === 'login'" class="login-screen">
         <div class="card">
           <h1 class="title">Tracker App</h1>
-          <p class="subtitle">Введите код для отслеживания маршрута.</p>
+          <p class="subtitle">Введите код для передачи или просмотра маршрута.</p>
           
           <input 
             v-model="trackingCode" 
@@ -17,6 +17,10 @@
           <button @click="startRealTracking" class="btn btn-primary">
             Отследить себя (GPS)
           </button>
+
+          <button @click="startWatchTracking" class="btn btn-secondary">
+            Отследить по коду
+          </button>
           
           <div class="divider">или</div>
           
@@ -26,6 +30,9 @@
 
           <div v-if="errorMessage" class="error-msg">
             {{ errorMessage }}
+          </div>
+          <div class="hint">
+            Код можно использовать для передачи другому устройству, чтобы оно начало отслеживать ваш маршрут.
           </div>
         </div>
       </div>
@@ -38,8 +45,8 @@
         <div class="header-ui">
           <button @click="stopTracking" class="back-btn">← Назад</button>
           <div class="status-badge">
-            <span class="dot" :class="isDemoMode ? 'bg-red' : 'bg-green'"></span>
-            {{ isDemoMode ? 'Фантом' : 'Реальный GPS' }}
+            <span class="dot" :class="isDemoMode ? 'bg-red' : isWatcherMode ? 'bg-yellow' : 'bg-green'"></span>
+            {{ isDemoMode ? 'Фантом' : isWatcherMode ? 'Просмотр по коду' : 'Реальный GPS' }}
           </div>
         </div>
 
@@ -47,13 +54,19 @@
         <div class="info-panel">
           <div class="info-header">
             <div>
-              <p class="label">Объект</p>
-              <p class="value">{{ trackingCode || (isDemoMode ? 'Курьер #884' : 'Мое устройство') }}</p>
+              <p class="label">Код для передачи</p>
+              <p class="value">{{ trackingCode || (isDemoMode ? 'DEMO-001' : 'GUEST') }}</p>
             </div>
             <div style="text-align: right;">
               <p class="label">Скорость</p>
               <p class="value text-blue">{{ speed }} км/ч</p>
             </div>
+          </div>
+          <div v-if="!isWatcherMode && !isDemoMode" class="share-note">
+            Поделитесь этим кодом, чтобы другие могли отслеживать вашу геолокацию.
+          </div>
+          <div v-if="isWatcherMode" class="watch-note">
+            Вы отслеживаете пользователя по коду <strong>{{ trackingCode }}</strong>.
           </div>
         </div>
       </div>
@@ -62,7 +75,7 @@
 </template>
 
 <script setup>
-import { ref, nextTick, onUnmounted } from 'vue';
+import { ref, nextTick, onUnmounted, computed } from 'vue';
 import { IonPage, IonContent } from '@ionic/vue';
 import { Geolocation } from '@capacitor/geolocation';
 import { Capacitor } from '@capacitor/core';
@@ -74,6 +87,7 @@ import { io } from 'socket.io-client';
 const currentScreen = ref('login');
 const trackingCode = ref('');
 const isDemoMode = ref(false);
+const isWatcherMode = ref(false);
 const errorMessage = ref('');
 const speed = ref(0);
 const routeCoordinates = ref([]);
@@ -84,76 +98,156 @@ let marker = null;
 let watchId = null;
 let socket = null;
 let demoInterval = null; // Для очистки интервала
+let mapLoaded = false;
 
-// --- ИНИЦИАЛИЗАЦИЯ КАРТЫ ---
-const initMap = async (startLng, startLat) => {
-  if (map) map.remove();
+const OPENFREEMAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
+const SOCKET_URL = 'http://192.168.8.70:3000';
+
+const getBrowserCurrentPosition = () => {
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true,
+      timeout: 20000,
+      maximumAge: 1000,
+    });
+  });
+};
+
+const initMap = async (startLng = 0, startLat = 0, zoom = 2) => {
+  if (map) {
+    map.remove();
+    map = null;
+    marker = null;
+    mapLoaded = false;
+  }
 
   map = new maplibregl.Map({
     container: 'map',
-    style: '[https://tiles.openfreemap.org/styles/liberty](https://tiles.openfreemap.org/styles/liberty)',
+    style: OPENFREEMAP_STYLE_URL,
     center: [startLng, startLat],
-    zoom: 15,
+    zoom,
     pitch: 45,
-    attributionControl: false
+    attributionControl: false,
   });
 
   const el = document.createElement('div');
   el.className = `custom-marker ${isDemoMode.value ? 'phantom-marker' : ''}`;
-  
+
   marker = new maplibregl.Marker({ element: el })
     .setLngLat([startLng, startLat])
     .addTo(map);
 
   map.on('load', () => {
+    mapLoaded = true;
+    map.resize();
+    setTimeout(() => map.resize(), 100);
+
     map.addSource('route', {
       type: 'geojson',
-      data: { type: 'Feature', geometry: { type: 'LineString', coordinates: routeCoordinates.value } }
+      data: {
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: routeCoordinates.value,
+        },
+      },
     });
 
     map.addLayer({
       id: 'route-line',
       type: 'line',
       source: 'route',
+      layout: {
+        'line-join': 'round',
+        'line-cap': 'round',
+      },
       paint: {
         'line-color': isDemoMode.value ? '#ef4444' : '#3b82f6',
         'line-width': 5,
-        'line-opacity': 0.8
-      }
+        'line-opacity': 0.8,
+      },
     });
+
+    if (routeCoordinates.value.length) {
+      updateRouteSource();
+    }
+  });
+};
+
+const updateRouteSource = () => {
+  if (!map || !mapLoaded) return;
+  const source = map.getSource('route');
+  if (!source) return;
+  source.setData({
+    type: 'Feature',
+    geometry: {
+      type: 'LineString',
+      coordinates: routeCoordinates.value,
+    },
   });
 };
 
 const updatePosition = (lng, lat) => {
   const newPos = [lng, lat];
   routeCoordinates.value.push(newPos);
-  
-  if (marker) marker.setLngLat(newPos);
+
+  if (marker) {
+    marker.setLngLat(newPos);
+  }
+
   if (map) {
     map.panTo(newPos, { duration: 1000 });
-    const source = map.getSource('route');
-    if (source) {
-      source.setData({
-        type: 'Feature',
-        geometry: { type: 'LineString', coordinates: routeCoordinates.value }
-      });
-    }
+    updateRouteSource();
   }
 };
 
-// --- ПОДКЛЮЧЕНИЕ К БЭКЕНДУ (NESTJS) ---
 const connectSocket = () => {
-  // Укажите IP вашего бэкенда. Если тестируете с телефона по Wi-Fi, пишите локальный IP (напр. [http://192.168.](http://192.168.)x.x:3000)
-  socket = io('http://192.168.8.70:3000'); 
+  if (socket?.connected) {
+    return;
+  }
+
+  socket = io(SOCKET_URL, {
+    transports: ['websocket'],
+  });
+
+  socket.on('connect', () => {
+    errorMessage.value = '';
+  });
+
+  socket.on('connect_error', (err) => {
+    errorMessage.value = 'Не удалось подключиться к серверу отслеживания.';
+    console.error('Socket connect_error:', err);
+  });
 };
 
-// --- РЕАЛЬНЫЙ GPS (Capacitor) ---
+const onServerLocationUpdated = (data) => {
+  if (!data || data.code !== trackingCode.value) {
+    return;
+  }
+
+  const lng = data.lng;
+  const lat = data.lat;
+
+  if (!routeCoordinates.value.length) {
+    routeCoordinates.value = [[lng, lat]];
+    if (!map) {
+      initMap(lng, lat, 15);
+    }
+  }
+
+  updatePosition(lng, lat);
+  speed.value = data.speed ? Math.round(data.speed * 3.6) : speed.value;
+};
+
 const startRealTracking = async () => {
   errorMessage.value = '';
+
+  if (!trackingCode.value) {
+    trackingCode.value = `USER-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+  }
+
   try {
-    // 1. Умная проверка прав (Нативные приложения vs Браузер)
     if (Capacitor.isNativePlatform()) {
-      // Если это iOS/Android приложение, запрашиваем права через Capacitor
       let permission = await Geolocation.checkPermissions();
       if (permission.location !== 'granted') {
         permission = await Geolocation.requestPermissions();
@@ -163,125 +257,171 @@ const startRealTracking = async () => {
         return;
       }
     } else {
-      // Если это браузер (веб-версия или тестирование через IP)
-      // В браузере проверка checkPermissions() может вызывать "Not implemented",
-      // поэтому мы просто проверяем поддержку и безопасный контекст
       if (!navigator.geolocation) {
         errorMessage.value = 'Ваш браузер не поддерживает GPS.';
         return;
       }
-      // Мобильные браузеры жестко требуют HTTPS для GPS (исключение - localhost)
       if (window.isSecureContext === false) {
         errorMessage.value = 'GPS заблокирован браузером. Требуется безопасное соединение (HTTPS) или localhost.';
         return;
       }
     }
 
-    // 2. Получаем первоначальную точку (В браузере именно тут появится всплывающее окно "Разрешить доступ к геоданным")
-    const position = await Geolocation.getCurrentPosition();
-    
+    const position = Capacitor.isNativePlatform()
+      ? await Geolocation.getCurrentPosition()
+      : await getBrowserCurrentPosition();
+
     isDemoMode.value = false;
+    isWatcherMode.value = false;
     currentScreen.value = 'map';
-    
-    const lng = position.coords.longitude;
-    const lat = position.coords.latitude;
-    routeCoordinates.value = [[lng, lat]];
-    
+    routeCoordinates.value = [[position.coords.longitude, position.coords.latitude]];
+    speed.value = 0;
+
     await nextTick();
-    await initMap(lng, lat);
+    await initMap(position.coords.longitude, position.coords.latitude, 15);
     connectSocket();
 
-    // 3. Отслеживаем перемещение в фоне. Сохраняем watchId для очистки
-    watchId = await Geolocation.watchPosition({ enableHighAccuracy: true }, (pos, err) => {
-      if (err) return;
-      const curLng = pos.coords.longitude;
-      const curLat = pos.coords.latitude;
-      
-      updatePosition(curLng, curLat);
-      speed.value = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+    if (Capacitor.isNativePlatform()) {
+      watchId = await Geolocation.watchPosition({ enableHighAccuracy: true }, (pos, err) => {
+        if (err) {
+          console.warn('watchPosition error', err);
+          return;
+        }
+        const curLng = pos.coords.longitude;
+        const curLat = pos.coords.latitude;
 
-      // Отправляем данные на наш NestJS бэкенд
-      if (socket) {
-        socket.emit('updateLocation', {
-          code: trackingCode.value || 'GUEST',
-          lat: curLat,
-          lng: curLng
-        });
-      }
-    });
+        updatePosition(curLng, curLat);
+        speed.value = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+
+        if (socket) {
+          socket.emit('updateLocation', {
+            code: trackingCode.value,
+            lat: curLat,
+            lng: curLng,
+          });
+        }
+      });
+    } else {
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          const curLng = pos.coords.longitude;
+          const curLat = pos.coords.latitude;
+
+          updatePosition(curLng, curLat);
+          speed.value = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+
+          if (socket) {
+            socket.emit('updateLocation', {
+              code: trackingCode.value,
+              lat: curLng,
+              lng: curLat,
+            });
+          }
+        },
+        (err) => {
+          console.warn('Browser watchPosition error', err);
+        },
+        { enableHighAccuracy: true, maximumAge: 1000, timeout: 20000 },
+      );
+    }
   } catch (e) {
-    // Делаем ошибки более читаемыми
-    if (e.message.includes('User denied')) {
+    const message = e?.message || e;
+    if (typeof message === 'string' && message.includes('User denied')) {
       errorMessage.value = 'Вы запретили доступ к геоданным в браузере.';
     } else {
-      errorMessage.value = 'Ошибка доступа к GPS: ' + e.message;
+      errorMessage.value = 'Ошибка доступа к GPS: ' + (message || 'неизвестная ошибка');
     }
   }
 };
 
-// --- ДЕМО РЕЖИМ (ФАНТОМ) ---
+const startWatchTracking = async () => {
+  if (!trackingCode.value) {
+    errorMessage.value = 'Введите код для начала просмотра.';
+    return;
+  }
+
+  errorMessage.value = '';
+  isDemoMode.value = false;
+  isWatcherMode.value = true;
+  currentScreen.value = 'map';
+  routeCoordinates.value = [];
+  speed.value = 0;
+
+  await nextTick();
+  await initMap(0, 0, 2);
+  connectSocket();
+
+  if (socket) {
+    socket.on('locationUpdated', onServerLocationUpdated);
+    socket.emit('watchCode', { code: trackingCode.value });
+  }
+};
+
 const startDemoTracking = async () => {
   if (!trackingCode.value) {
     errorMessage.value = 'Введите код для демо-режима';
     return;
   }
-  
+
   errorMessage.value = '';
   isDemoMode.value = true;
+  isWatcherMode.value = false;
   currentScreen.value = 'map';
-  connectSocket();
+  routeCoordinates.value = [[71.4305, 51.1282]];
+  speed.value = 45;
 
-  // Имитация диспетчера: слушаем сокеты из бэкенда
-  socket.emit('watchCode', { code: trackingCode.value });
-
-  // В реальном проекте здесь мы бы слушали `socket.on('locationUpdated', ...)`
-  let currentLng = 71.4305;
-  let currentLat = 51.1282;
-  routeCoordinates.value = [[currentLng, currentLat]];
-  
   await nextTick();
-  await initMap(currentLng, currentLat);
+  await initMap(71.4305, 51.1282, 15);
 
-  // Очищаем предыдущий интервал, если он почему-то завис
-  if (demoInterval) clearInterval(demoInterval);
+  if (demoInterval) {
+    clearInterval(demoInterval);
+  }
 
   demoInterval = setInterval(() => {
-    currentLng += 0.0001;
-    currentLat += 0.0001;
+    const last = routeCoordinates.value[routeCoordinates.value.length - 1];
+    const currentLng = last[0] + 0.0001;
+    const currentLat = last[1] + 0.0001;
     updatePosition(currentLng, currentLat);
     speed.value = 45;
   }, 2000);
 };
 
-// --- ОЧИСТКА ПАМЯТИ И ОСТАНОВКА ---
 const stopTracking = () => {
   currentScreen.value = 'login';
   routeCoordinates.value = [];
-  
-  // Отписываемся от GPS трекера
-  if (watchId) {
-    Geolocation.clearWatch({ id: watchId });
+  speed.value = 0;
+  isDemoMode.value = false;
+  isWatcherMode.value = false;
+
+  if (watchId !== null && watchId !== undefined) {
+    if (Capacitor.isNativePlatform()) {
+      Geolocation.clearWatch({ id: watchId });
+    } else {
+      navigator.geolocation.clearWatch(watchId);
+    }
     watchId = null;
   }
-  
-  // Очищаем интервал фантомного движения
+
   if (demoInterval) {
     clearInterval(demoInterval);
     demoInterval = null;
   }
-  
-  // Отключаем веб-сокеты
+
   if (socket) {
+    socket.off('locationUpdated', onServerLocationUpdated);
+    socket.off('connect_error');
+    socket.off('connect');
+    socket.off('disconnect');
     socket.disconnect();
     socket = null;
   }
 };
 
-// Хук жизненного цикла Vue: когда компонент удаляется (например, переход на другой экран)
 onUnmounted(() => {
   stopTracking();
   if (map) {
     map.remove();
+    map = null;
   }
 });
 </script>
@@ -295,9 +435,13 @@ onUnmounted(() => {
 .input-field { width: 100%; padding: 12px; border: 1px solid #d1d5db; border-radius: 10px; margin-bottom: 15px; }
 .btn { width: 100%; padding: 12px; border-radius: 10px; font-weight: bold; margin-bottom: 10px; }
 .btn-primary { background: #2563eb; color: white; border: none; }
+.btn-secondary { background: #f3f4f6; color: #111827; border: 1px solid #d1d5db; }
 .btn-danger { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
 .divider { margin: 15px 0; color: #9ca3af; font-size: 14px; }
 .error-msg { margin-top: 10px; color: #dc2626; background: #fef2f2; padding: 10px; border-radius: 8px; font-size: 14px; }
+.hint { margin-top: 10px; color: #6b7280; font-size: 13px; line-height: 1.4; }
+.share-note, .watch-note { margin-top: 12px; font-size: 14px; color: #374151; }
+.bg-yellow { background: #fbbf24; }
 
 .map-wrapper { height: 100%; position: relative; }
 .map-container { position: absolute; top: 0; bottom: 0; width: 100%; }
