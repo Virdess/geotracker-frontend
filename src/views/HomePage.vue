@@ -168,6 +168,11 @@ let displayedPosition = null;
 const OPENFREEMAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL
   ?? `${window.location.protocol}//${window.location.hostname}:3001`;
+const SOCKET_TRANSPORTS = (import.meta.env.VITE_SOCKET_TRANSPORTS ?? 'websocket,polling')
+  .split(',')
+  .map((transport) => transport.trim())
+  .filter(Boolean);
+const SOCKET_TIMEOUT = Number(import.meta.env.VITE_SOCKET_TIMEOUT ?? 30000);
 const buildInfo = computed(() => `${import.meta.env.MODE}${import.meta.env.PROD ? ' / prod' : ' / dev'}`);
 const socketPollingUrl = computed(() => {
   const url = new URL('/socket.io/', SOCKET_URL);
@@ -418,12 +423,12 @@ const connectSocket = () => {
   lastSocketEvent.value = new Date().toLocaleTimeString();
 
   socket = io(SOCKET_URL, {
-    transports: ['websocket', 'polling'],
+    transports: SOCKET_TRANSPORTS,
     tryAllTransports: true,
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
-    timeout: 10000,
+    timeout: SOCKET_TIMEOUT,
   });
 
   socket.on('connect', () => {
