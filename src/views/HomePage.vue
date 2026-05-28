@@ -45,6 +45,10 @@
               <strong>{{ socketStatus }}</strong>
             </div>
             <div class="debug-row">
+              <span>Ошибка</span>
+              <strong>{{ socketError || '-' }}</strong>
+            </div>
+            <div class="debug-row">
               <span>Сборка</span>
               <strong>{{ buildInfo }}</strong>
             </div>
@@ -95,6 +99,14 @@
               <strong>{{ socketId || '-' }}</strong>
             </div>
             <div class="debug-row">
+              <span>Транспорт</span>
+              <strong>{{ socketTransport || '-' }}</strong>
+            </div>
+            <div class="debug-row">
+              <span>Ошибка</span>
+              <strong>{{ socketError || '-' }}</strong>
+            </div>
+            <div class="debug-row">
               <span>Событие</span>
               <strong>{{ lastSocketEvent }}</strong>
             </div>
@@ -123,6 +135,8 @@ const speed = ref(0);
 const routeCoordinates = ref([]);
 const socketStatus = ref('не подключен');
 const socketId = ref('');
+const socketTransport = ref('');
+const socketError = ref('');
 const lastSocketEvent = ref('нет событий');
 
 let map = null;
@@ -366,26 +380,39 @@ const connectSocket = () => {
   lastSocketEvent.value = new Date().toLocaleTimeString();
 
   socket = io(SOCKET_URL, {
-    transports: ['websocket'],
+    transports: ['polling', 'websocket'],
     reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 1000,
+    timeout: 10000,
   });
 
   socket.on('connect', () => {
     errorMessage.value = '';
     socketStatus.value = 'подключен';
     socketId.value = socket.id;
+    socketTransport.value = socket.io.engine.transport.name;
+    socketError.value = '';
     lastSocketEvent.value = new Date().toLocaleTimeString();
+
+    socket.io.engine.on('upgrade', (transport) => {
+      socketTransport.value = transport.name;
+      lastSocketEvent.value = new Date().toLocaleTimeString();
+    });
   });
 
   socket.on('disconnect', (reason) => {
     socketStatus.value = `отключен: ${reason}`;
     socketId.value = '';
+    socketTransport.value = '';
     lastSocketEvent.value = new Date().toLocaleTimeString();
   });
 
   socket.on('connect_error', (err) => {
     socketStatus.value = 'ошибка подключения';
     socketId.value = '';
+    socketTransport.value = '';
+    socketError.value = err?.message || 'unknown error';
     lastSocketEvent.value = new Date().toLocaleTimeString();
     errorMessage.value = 'Не удалось подключиться к серверу отслеживания.';
     console.error('Socket connect_error:', err);
@@ -629,6 +656,8 @@ const stopTracking = () => {
 
   socketStatus.value = 'не подключен';
   socketId.value = '';
+  socketTransport.value = '';
+  socketError.value = '';
   lastSocketEvent.value = 'нет событий';
 };
 
