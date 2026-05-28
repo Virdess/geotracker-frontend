@@ -52,6 +52,13 @@
               <span>Сборка</span>
               <strong>{{ buildInfo }}</strong>
             </div>
+            <div class="debug-row">
+              <span>HTTP</span>
+              <strong>{{ backendCheckStatus }}</strong>
+            </div>
+            <button @click="testBackendHttp" class="debug-btn">
+              Check backend
+            </button>
           </div>
         </div>
       </div>
@@ -110,6 +117,13 @@
               <span>Событие</span>
               <strong>{{ lastSocketEvent }}</strong>
             </div>
+            <div class="debug-row">
+              <span>HTTP</span>
+              <strong>{{ backendCheckStatus }}</strong>
+            </div>
+            <button @click="testBackendHttp" class="debug-btn">
+              Check backend
+            </button>
           </div>
         </div>
       </div>
@@ -137,6 +151,7 @@ const socketStatus = ref('не подключен');
 const socketId = ref('');
 const socketTransport = ref('');
 const socketError = ref('');
+const backendCheckStatus = ref('not checked');
 const lastSocketEvent = ref('нет событий');
 
 let map = null;
@@ -154,6 +169,13 @@ const OPENFREEMAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL
   ?? `${window.location.protocol}//${window.location.hostname}:3001`;
 const buildInfo = computed(() => `${import.meta.env.MODE}${import.meta.env.PROD ? ' / prod' : ' / dev'}`);
+const socketPollingUrl = computed(() => {
+  const url = new URL('/socket.io/', SOCKET_URL);
+  url.searchParams.set('EIO', '4');
+  url.searchParams.set('transport', 'polling');
+  url.searchParams.set('t', Date.now().toString());
+  return url.toString();
+});
 const MIN_ACCURACY_METERS = 80;
 const MIN_DISTANCE_METERS = 4;
 const MAX_REASONABLE_SPEED_MPS = 70;
@@ -314,6 +336,22 @@ const emitLocation = (location) => {
   });
 };
 
+const testBackendHttp = async () => {
+  backendCheckStatus.value = 'checking...';
+
+  try {
+    const response = await fetch(socketPollingUrl.value, {
+      method: 'GET',
+      cache: 'no-store',
+    });
+    const text = await response.text();
+    const preview = text.slice(0, 36).replace(/\s+/g, ' ');
+    backendCheckStatus.value = `${response.status} ${response.ok ? 'OK' : 'ERROR'} ${preview}`;
+  } catch (error) {
+    backendCheckStatus.value = `${error?.name || 'Error'}: ${error?.message || error}`;
+  }
+};
+
 const initMap = async (startLng = 0, startLat = 0, zoom = 2) => {
   if (map) {
     map.remove();
@@ -380,7 +418,8 @@ const connectSocket = () => {
   lastSocketEvent.value = new Date().toLocaleTimeString();
 
   socket = io(SOCKET_URL, {
-    transports: ['polling', 'websocket'],
+    transports: ['websocket', 'polling'],
+    tryAllTransports: true,
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
@@ -689,6 +728,7 @@ onUnmounted(() => {
 .debug-title { color: #374151; font-size: 12px; font-weight: 700; margin-bottom: 8px; text-transform: uppercase; }
 .debug-row { display: flex; justify-content: space-between; gap: 12px; color: #6b7280; font-size: 12px; line-height: 1.4; }
 .debug-row strong { color: #111827; font-weight: 600; text-align: right; overflow-wrap: anywhere; }
+.debug-btn { width: 100%; margin-top: 10px; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; background: white; color: #111827; font-size: 12px; font-weight: 700; }
 .map-debug-panel { margin-top: 12px; }
 
 .map-wrapper { height: 100%; position: relative; }
